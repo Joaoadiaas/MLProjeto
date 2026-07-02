@@ -1,0 +1,9 @@
+# Dados locais do n8n (contem credenciais/banco) - NUNCA versionar
+n8n_data/
+
+# Variaveis de ambiente com segredos
+.env
+
+# Sistema
+.DS_Store
+Thumbs.db

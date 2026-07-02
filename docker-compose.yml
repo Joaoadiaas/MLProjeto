@@ -1,0 +1,19 @@
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      # Fuso horario (ajuste se quiser)
+      - GENERIC_TIMEZONE=America/Recife
+      - TZ=America/Recife
+      # Necessario para o login funcionar em http://localhost (sem HTTPS)
+      - N8N_SECURE_COOKIE=false
+    volumes:
+      # Guarda seus workflows e credenciais mesmo se o container reiniciar
+      - ./n8n_data:/home/node/.n8n
+    # "start --tunnel" gera uma URL publica temporaria.
+    # E ela que o Telegram usa para te enviar as mensagens (webhook).
+    command: start --tunnel
