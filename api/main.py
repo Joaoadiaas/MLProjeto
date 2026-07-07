@@ -9,6 +9,7 @@ Docs:
 """
 import json
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import joblib
@@ -21,19 +22,18 @@ from api.schemas import CustomerFeatures, ModelInfoResponse, PredictionResponse 
 
 MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
 
-app = FastAPI(
-    title="Customer Churn Prediction API",
-    description="Serves a scikit-learn model that scores telecom customers for churn risk.",
-    version="1.0.0",
-)
-
 _model = None
 _feature_cols = None
 _metrics = None
 
 
-@app.on_event("startup")
 def load_artifacts():
+    """Loads model artifacts from disk into the module-level globals above.
+
+    Called from the app's lifespan handler on startup, and also called
+    directly by tests (via TestClient's context manager) so /predict and
+    /model-info behave the same in tests as they do under uvicorn.
+    """
     global _model, _feature_cols, _metrics
     model_path = MODELS_DIR / "churn_model.pkl"
     features_path = MODELS_DIR / "feature_list.json"
@@ -48,6 +48,20 @@ def load_artifacts():
     _feature_cols = json.loads(features_path.read_text())
     if metrics_path.exists():
         _metrics = json.loads(metrics_path.read_text())
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    load_artifacts()
+    yield
+
+
+app = FastAPI(
+    title="Customer Churn Prediction API",
+    description="Serves a scikit-learn model that scores telecom customers for churn risk.",
+    version="1.0.0",
+    lifespan=lifespan,
+)
 
 
 def _risk_label(prob: float) -> str:

@@ -42,6 +42,4 @@
   "Contract_Two year",
   "PaymentMethod_Bank transfer (automatic)",
   "PaymentMethod_Credit card (automatic)",
-  "PaymentMethod_Electronic check",
-  "PaymentMethod_Mailed check"
-]
+  "PaymentMethod_Electro
