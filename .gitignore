@@ -6,10 +6,10 @@ venv/
 .venv/
 *.egg-info/
 
-# generated artifacts (reproducible via `make data && make train`)
+# artefatos gerados (reproduziveis via `make dados && make treino`)
 data/processed/*.csv
 models/*.pkl
 models/plots/
-models/drift_report*.json
+models/relatorio_drift*.json
 
-.DS_Store
+.DS_St

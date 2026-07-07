@@ -1,8 +1,11 @@
 """
-Streamlit dashboard for the churn model - single-customer scoring with
-SHAP explainability, plus batch scoring from an uploaded CSV.
+Dashboard Streamlit - Monitor de Risco de Inadimplencia de Credito (Brasil)
 
-Run:
+Mostra o historico real de inadimplencia (Banco Central), permite simular
+um cenario macroeconomico e ver a previsao do modelo, e traz a
+explicabilidade (SHAP) de cada previsao.
+
+Rodar:
     streamlit run app/dashboard.py
 """
 import json
@@ -15,123 +18,141 @@ import shap
 import streamlit as st
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
-from src.data_processing import build_feature_frame  # noqa: E402
+from src.processamento import build_feature_frame, montar_painel_wide  # noqa: E402
 
 MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
 
-st.set_page_config(page_title="Churn Risk Dashboard", layout="wide")
+st.set_page_config(page_title="Risco de Inadimplência - Brasil", layout="wide")
 
 
 @st.cache_resource
-def load_artifacts():
-    model = joblib.load(MODELS_DIR / "churn_model.pkl")
-    feature_cols = json.loads((MODELS_DIR / "feature_list.json").read_text())
-    metrics = json.loads((MODELS_DIR / "metrics.json").read_text())
-    return model, feature_cols, metrics
+def carregar_artefatos():
+    modelo = joblib.load(MODELS_DIR / "modelo_risco_credito.pkl")
+    colunas = json.loads((MODELS_DIR / "feature_list.json").read_text())
+    metricas = json.loads((MODELS_DIR / "metrics.json").read_text())
+    return modelo, colunas, metricas
 
 
-st.title("📉 Customer Churn Risk Dashboard")
+@st.cache_data
+def carregar_painel_historico():
+    return montar_painel_wide()
 
-if not (MODELS_DIR / "churn_model.pkl").exists():
-    st.warning(
-        "No trained model found yet. Run `python src/train.py` first, then reload this page."
-    )
+
+st.title("Monitor de Risco de Inadimplência de Crédito - Brasil")
+st.caption(
+    "Dados reais do Banco Central do Brasil (SGS): inadimplência da carteira "
+    "de crédito, Selic, IPCA, desemprego e saldo de crédito."
+)
+
+if not (MODELS_DIR / "modelo_risco_credito.pkl").exists():
+    st.warning("Nenhum modelo treinado ainda. Rode `python src/treino.py` e recarregue esta página.")
     st.stop()
 
-model, feature_cols, metrics = load_artifacts()
+modelo, colunas, metricas = carregar_artefatos()
+painel = carregar_painel_historico()
 
 with st.sidebar:
-    st.header("Model info")
-    st.metric("Best model", metrics["best_model"])
-    st.metric("ROC-AUC (test)", metrics["candidates"][metrics["best_model"]]["roc_auc"])
-    st.caption("Metrics computed on held-out test set during training.")
+    st.header("Sobre o modelo")
+    st.metric("Melhor modelo", metricas["melhor_modelo"])
+    st.metric("ROC-AUC (teste)", metricas["candidatos"][metricas["melhor_modelo"]]["roc_auc"])
+    st.caption(f"Treino: {metricas['periodo_treino'][0]} a {metricas['periodo_treino'][1]}")
+    st.caption(f"Teste: {metricas['periodo_teste'][0]} a {metricas['periodo_teste'][1]}")
 
-tab_single, tab_batch = st.tabs(["🔍 Score one customer", "📄 Batch scoring (CSV)"])
+aba_historico, aba_simulador = st.tabs(["Histórico real (BCB)", "Simular cenário"])
 
-with tab_single:
-    st.subheader("Customer profile")
-    col1, col2, col3 = st.columns(3)
+with aba_historico:
+    st.subheader("Taxa de inadimplência por segmento (dados reais)")
+    st.line_chart(
+        painel.set_index("data")[["inad_total", "inad_pf", "inad_pj"]].rename(
+            columns={"inad_total": "Total", "inad_pf": "Pessoa Física", "inad_pj": "Pessoa Jurídica"}
+        )
+    )
 
+    col1, col2 = st.columns(2)
     with col1:
-        gender = st.selectbox("Gender", ["Female", "Male"])
-        senior = st.selectbox("Senior citizen", [0, 1])
-        partner = st.selectbox("Partner", ["Yes", "No"])
-        dependents = st.selectbox("Dependents", ["Yes", "No"])
-        tenure = st.slider("Tenure (months)", 0, 72, 12)
+        st.subheader("Selic mensal (%)")
+        st.line_chart(painel.set_index("data")[["selic_mensal"]])
+    with col2:
+        st.subheader("Desemprego (%)")
+        st.line_chart(painel.set_index("data")[["desemprego"]])
+
+    st.dataframe(
+        painel.tail(12)[["data", "inad_total", "inad_pf", "inad_pj", "selic_mensal", "desemprego"]],
+        use_container_width=True,
+    )
+
+with aba_simulador:
+    st.subheader("Simular um cenário macroeconômico")
+    ultimo = painel.iloc[-1]
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        segmento = st.selectbox("Segmento", ["total", "pf", "pj"])
+        mes = st.slider("Mês", 1, 12, int(ultimo["data"].month))
+        trimestre = (mes - 1) // 3 + 1
+        tendencia = st.number_input("Tendência (meses desde início da série)", value=len(painel), step=1)
 
     with col2:
-        contract = st.selectbox("Contract", ["Month-to-month", "One year", "Two year"])
-        payment = st.selectbox(
-            "Payment method",
-            ["Electronic check", "Mailed check", "Bank transfer (automatic)", "Credit card (automatic)"],
-        )
-        paperless = st.selectbox("Paperless billing", ["Yes", "No"])
-        internet = st.selectbox("Internet service", ["DSL", "Fiber optic", "No"])
-        phone = st.selectbox("Phone service", ["Yes", "No"])
+        selic_mensal = st.number_input("Selic mensal (%)", value=float(ultimo["selic_mensal"]))
+        selic_acum_3m = st.number_input("Selic acumulada 3m (%)", value=float(selic_mensal * 3))
+        ipca_mensal = st.number_input("IPCA mensal (%)", value=float(ultimo["ipca_mensal"]))
+        ipca_acum_12m = st.number_input("IPCA acumulado 12m (%)", value=5.0)
 
     with col3:
-        monthly = st.number_input("Monthly charges ($)", 18.0, 130.0, 75.0)
-        total = st.number_input("Total charges ($)", 0.0, 10000.0, float(monthly * tenure))
-        tech_support = st.selectbox("Tech support", ["Yes", "No", "No internet service"])
-        online_security = st.selectbox("Online security", ["Yes", "No", "No internet service"])
-        streaming_tv = st.selectbox("Streaming TV", ["Yes", "No", "No internet service"])
+        desemprego = st.number_input("Desemprego (%)", value=float(ultimo["desemprego"]))
+        saldo_var_m = st.number_input("Variação mensal saldo crédito (%)", value=0.5)
+        saldo_var_12m = st.number_input("Variação 12m saldo crédito (%)", value=7.0)
 
-    customer = pd.DataFrame([{
-        "gender": gender, "SeniorCitizen": senior, "Partner": partner, "Dependents": dependents,
-        "tenure": tenure, "PhoneService": phone, "MultipleLines": "No",
-        "InternetService": internet, "OnlineSecurity": online_security, "OnlineBackup": "No",
-        "DeviceProtection": "No", "TechSupport": tech_support, "StreamingTV": streaming_tv,
-        "StreamingMovies": "No", "Contract": contract, "PaperlessBilling": paperless,
-        "PaymentMethod": payment, "MonthlyCharges": monthly, "TotalCharges": total,
+    col4, col5, col6 = st.columns(3)
+    col_map = {"total": "inad_total", "pf": "inad_pf", "pj": "inad_pj"}
+    valor_atual = float(ultimo[col_map[segmento]])
+    with col4:
+        lag1 = st.number_input("Inadimplência mês anterior (%)", value=valor_atual)
+    with col5:
+        lag2 = st.number_input("Inadimplência há 2 meses (%)", value=valor_atual)
+    with col6:
+        lag3 = st.number_input("Inadimplência há 3 meses (%)", value=valor_atual)
+
+    cenario = pd.DataFrame([{
+        "segmento": segmento, "mes": mes, "trimestre": trimestre, "tendencia": tendencia,
+        "selic_mensal": selic_mensal, "selic_acum_3m": selic_acum_3m,
+        "ipca_mensal": ipca_mensal, "ipca_acum_12m": ipca_acum_12m,
+        "desemprego": desemprego, "saldo_credito_var_mensal": saldo_var_m,
+        "saldo_credito_var_12m": saldo_var_12m,
+        "inadimplencia_lag1": lag1, "inadimplencia_lag2": lag2, "inadimplencia_lag3": lag3,
     }])
 
-    if st.button("Score customer", type="primary"):
-        X, _ = build_feature_frame(customer, fit_columns=feature_cols)
-        proba = float(model.predict_proba(X)[0, 1])
+    if st.button("Prever risco", type="primary"):
+        X, _ = build_feature_frame(cenario, fit_columns=colunas)
+        proba = float(modelo.predict_proba(X)[0, 1])
 
-        risk = "🟢 Low" if proba < 0.3 else ("🟡 Medium" if proba < 0.6 else "🔴 High")
-        st.metric("Churn probability", f"{proba:.1%}", delta=None)
-        st.markdown(f"### Risk level: {risk}")
+        if proba < 0.35:
+            risco = "Baixo"
+        elif proba < 0.65:
+            risco = "Médio"
+        else:
+            risco = "Alto"
 
-        st.subheader("Why? (SHAP explanation)")
-        clf = model.named_steps["clf"]
+        st.metric("Probabilidade de a inadimplência subir no próximo mês", f"{proba:.1%}")
+        st.markdown(f"### Nível de risco: {risco}")
+
+        st.subheader("Por quê? (explicação via SHAP)")
+        clf = modelo.named_steps["clf"]
+        explicacao_ok = True
         try:
             if hasattr(clf, "feature_importances_"):
                 explainer = shap.TreeExplainer(clf)
                 shap_values = explainer.shap_values(X)
                 sv = shap_values[1][0] if isinstance(shap_values, list) else shap_values[0]
             else:
-                X_scaled = model.named_steps["scaler"].transform(X)
-                explainer = shap.LinearExplainer(clf, X_scaled)
-                sv = explainer.shap_values(X_scaled)[0]
+                X_escalado = modelo.named_steps["scaler"].transform(X)
+                explainer = shap.LinearExplainer(clf, X_escalado)
+                sv = explainer.shap_values(X_escalado)[0]
+        except Exception as e:  # pragma: no cover - explicabilidade e best-effort
+            explicacao_ok = False
+            st.info(f"Explicação SHAP indisponível para este tipo de modelo: {e}")
 
-            contrib = pd.Series(sv, index=feature_cols).sort_values(key=abs, ascending=False).head(10)
+        if explicacao_ok:
+            contrib = pd.Series(sv, index=colunas).sort_values(key=abs, ascending=False).head(10)
             st.bar_chart(contrib)
-            st.caption("Top 10 features by |SHAP value| pushing this prediction up (churn) or down (stay).")
-        except Exception as e:  # pragma: no cover - explainability is best-effort
-            st.info(f"SHAP explanation unavailable for this model type: {e}")
-
-with tab_batch:
-    st.subheader("Score a batch of customers")
-    st.caption("Upload a CSV with the same columns as data/raw/telco_churn.csv (customerID/Churn optional).")
-    uploaded = st.file_uploader("Upload CSV", type="csv")
-
-    if uploaded is not None:
-        raw = pd.read_csv(uploaded)
-        X, _ = build_feature_frame(raw, fit_columns=feature_cols)
-        proba = model.predict_proba(X)[:, 1]
-
-        out = raw.copy()
-        out["churn_probability"] = proba.round(4)
-        out["risk_label"] = pd.cut(
-            proba, bins=[-0.01, 0.3, 0.6, 1.0], labels=["low", "medium", "high"]
-        )
-        out = out.sort_values("churn_probability", ascending=False)
-
-        st.dataframe(out, use_container_width=True)
-        st.download_button(
-            "Download scored CSV",
-            out.to_csv(index=False).encode("utf-8"),
-            file_name="scored_customers.csv",
-            mime="text/csv",
-        )
+            st.caption("Top 10 features por |valor SHAP| - o que mais empurrou a previsão para cima ou para baixo.")

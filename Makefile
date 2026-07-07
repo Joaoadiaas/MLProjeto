@@ -1,15 +1,15 @@
-.PHONY: setup data train test api dashboard monitor docker-build docker-up clean
+.PHONY: setup dados treino teste api dashboard monitorar docker-build docker-up limpar
 
 setup:
 	pip install -r requirements.txt
 
-data:
-	python src/generate_data.py
+dados:
+	python src/coleta_dados.py
 
-train:
-	python src/train.py
+treino:
+	python src/treino.py
 
-test:
+teste:
 	pytest -v
 
 api:
@@ -18,8 +18,8 @@ api:
 dashboard:
 	streamlit run app/dashboard.py
 
-monitor:
-	python src/monitoring.py
+monitorar:
+	python src/monitoramento.py
 
 docker-build:
 	docker compose build
@@ -27,5 +27,5 @@ docker-build:
 docker-up:
 	docker compose up
 
-clean:
-	rm -rf models/*.pkl models/*.json models/plots data/processed/*.csv
+limpar:
+	rm -rf models/*.pkl models/*.json models/plots models

@@ -1,180 +1,187 @@
-# Customer Churn Prediction — End-to-End ML System
+# Monitor de Risco de Inadimplência de Crédito — Brasil
 
-A production-style machine learning project: predicts which telecom customers
-are likely to cancel their subscription, and ships the model as a real
-service (API + dashboard) with tests, monitoring, and CI — not just a
-notebook.
+Sistema de machine learning que prevê se a taxa de inadimplência de crédito
+no Brasil (total, pessoa física ou pessoa jurídica) vai **subir no próximo
+mês**, usando dados reais e públicos do Banco Central do Brasil.
 
-Built to demonstrate the full lifecycle a data scientist / ML engineer role
-expects: data understanding, modeling, evaluation, deployment, testing, and
-production monitoring.
+Construído para mostrar o ciclo completo que uma vaga de Dados/ML espera:
+entendimento de um problema real, modelagem, avaliação honesta, entrega como
+serviço (API + dashboard), testes automatizados e monitoramento de produção —
+não só um notebook com uma métrica.
 
-## Why this project
+## Por que esse problema
 
-Most churn-prediction portfolios stop at a notebook with an accuracy score.
-This one goes further and answers the questions a hiring team actually cares
-about: *can you ship a model that other systems can call, can you test it,
-and would you know if it silently broke in production?*
+Times de risco de crédito de bancos e fintechs brasileiras acompanham de
+perto a trajetória da inadimplência para ajustar política de concessão de
+crédito, apetite de risco e provisão para devedores duvidosos (PDD). Este
+projeto simula esse tipo de sinal de alerta antecipado: dado o cenário
+macroeconômico atual (Selic, inflação, desemprego, volume de crédito) e o
+histórico recente de inadimplência, o modelo estima a probabilidade de a
+inadimplência **piorar** no mês seguinte.
 
-## Architecture
+Diferente da maioria dos projetos de portfólio, aqui os dados **não são
+sintéticos**: vêm da API pública do Banco Central (SGS), a mesma fonte usada
+por analistas de mercado e áreas de risco.
 
-```
-                     ┌───────────────────┐
-                     │  telco_churn.csv  │
-                     └─────────┬─────────┘
-                               │
-                     data_processing.py  (clean + feature engineering,
-                               │          shared by training AND serving)
-                               │
-                     ┌─────────┴─────────┐
-                     │     train.py      │  trains & compares 3 models,
-                     │                   │  picks best by ROC-AUC
-                     └─────────┬─────────┘
-                               │
-              ┌────────────────┼────────────────┐
-              │                │                 │
-      models/churn_model.pkl   │           models/metrics.json
-              │                │
-   ┌──────────┴─────────┐      │
-   │   FastAPI service   │     │        monitoring.py
-   │   (api/main.py)     │     │        PSI drift check between
-   │   POST /predict     │     │        reference vs. current data
-   └──────────┬──────────┘     │
-              │                │
-   ┌──────────┴──────────┐     │
-   │ Streamlit dashboard  │────┘
-   │ (app/dashboard.py)   │
-   │ single + batch scoring, SHAP explainability
-   └──────────────────────┘
-```
+## Fonte dos dados (100% real e pública)
 
-## Dataset note
+API do Banco Central: [`api.bcb.gov.br`](https://api.bcb.gov.br) — Sistema
+Gerenciador de Séries Temporais (SGS).
 
-The classic reference for this task is the IBM/Kaggle **Telco Customer
-Churn** dataset. This repo generates a **synthetic dataset with the identical
-schema** (`src/generate_data.py`) instead of shipping the original file, with
-realistic, tunable relationships between features and churn (e.g.
-month-to-month contracts and low tenure meaningfully raise churn risk, same
-as in the real data).
+| Série | Código SGS | Descrição |
+|---|---|---|
+| Inadimplência total | 21082 | % da carteira de crédito do SFN com parcela vencida há mais de 90 dias |
+| Inadimplência PF | 21112 | Idem, recursos livres — pessoa física |
+| Inadimplência PJ | 21086 | Idem, recursos livres — pessoa jurídica |
+| Selic mensal | 4390 | Taxa Selic acumulada no mês |
+| IPCA mensal | 433 | Variação mensal do índice de inflação oficial |
+| Desemprego | 24369 | Taxa de desocupação (PNAD Contínua/IBGE) |
+| Saldo de crédito | 20542 | Saldo da carteira de crédito com recursos livres (R$ milhões) |
 
-To use the real dataset instead: download it and drop it at
-`data/raw/telco_churn.csv` with the same column names — every downstream
-script depends only on the schema, not on the generator.
+Histórico: **março/2011 a maio/2026** (~15 anos). `src/coleta_dados.py`
+baixa os dados mais recentes diretamente da API; uma cópia usada para
+construir este projeto fica salva em `data/raw/*.json` para o pipeline
+funcionar mesmo offline.
 
-## Project structure
+## Arquitetura
 
 ```
-├── data/raw/telco_churn.csv     # dataset (generated or real)
-├── notebooks/01_eda.ipynb       # exploratory analysis
+   API do Banco Central (SGS)
+              │
+      src/coleta_dados.py        baixa/atualiza as series reais
+              │
+      src/processamento.py       junta as series num painel mensal,
+              │                  cria lags, features macro e o alvo
+              │                  "a inadimplencia sobe no mes seguinte?"
+              │                  split CRONOLOGICO (treino=passado, teste=futuro)
+              │
+        src/treino.py            treina e compara 3 modelos,
+              │                  seleciona o melhor por ROC-AUC
+              │
+   ┌──────────┴──────────┐
+   │                      │
+models/modelo_risco_       models/metrics.json
+credito.pkl                       │
+   │                              │
+   ├─────────────┬────────────────┘
+   │             │
+api/main.py   src/monitoramento.py
+POST /prever   PSI: detecta mudanca de regime
+   │           economico entre treino e producao
+app/dashboard.py
+historico real + simulador de cenario + explicabilidade SHAP
+```
+
+## Estrutura do projeto
+
+```
+├── data/raw/bcb_*.json          # series reais baixadas do Banco Central
+├── notebooks/01_eda.ipynb       # analise exploratoria dos dados reais
 ├── src/
-│   ├── generate_data.py         # synthetic data generator
-│   ├── data_processing.py       # cleaning + feature engineering (shared train/serve)
-│   ├── train.py                 # trains + compares models, saves best
-│   └── monitoring.py            # PSI-based data drift detection
+│   ├── coleta_dados.py          # baixa/atualiza as series do BCB
+│   ├── processamento.py         # painel mensal, features, alvo, split cronologico
+│   ├── treino.py                 # treina + compara modelos, salva o melhor
+│   └── monitoramento.py          # deteccao de drift via PSI
 ├── api/
-│   ├── main.py                  # FastAPI service (/predict, /health, /model-info)
-│   └── schemas.py                # request/response validation
-├── app/dashboard.py              # Streamlit UI: single + batch scoring, SHAP
-├── tests/                        # pytest suite
-├── models/                       # trained artifacts (generated, gitignored)
+│   ├── main.py                   # API FastAPI (/prever, /health, /model-info)
+│   └── schemas.py                 # validacao de entrada/saida
+├── app/dashboard.py               # Streamlit: historico real + simulador + SHAP
+├── tests/                         # suite pytest
+├── models/                        # artefatos treinados (gerados, gitignored)
 ├── Dockerfile / docker-compose.yml
-└── .github/workflows/ci.yml      # test + lint on every push
+└── .github/workflows/ci.yml       # testes + lint a cada push
 ```
 
-## Getting started
+## Como rodar
 
 ```bash
-git clone <this-repo>
-cd churn-prediction-mlops   # or wherever you cloned it
-python -m venv .venv && source .venv/bin/activate
-make setup          # pip install -r requirements.txt
+git clone <este-repositorio>
+cd <pasta-do-projeto>
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+make setup            # pip install -r requirements.txt
 
-make data           # generates data/raw/telco_churn.csv
-make train          # trains 3 models, saves the best to models/
-make test           # runs the pytest suite
+make dados            # baixa os dados mais recentes do Banco Central
+make treino           # treina 3 modelos, salva o melhor em models/
+make teste            # roda a suite pytest
 
-make api            # http://localhost:8000/docs
-make dashboard      # http://localhost:8501
+make api              # http://localhost:8000/docs
+make dashboard        # http://localhost:8501
 ```
 
-Or with Docker:
+Ou com Docker:
 
 ```bash
 docker compose up --build
 ```
 
-## Modeling approach
+## Abordagem de modelagem
 
-`src/train.py` trains and compares three standard classifiers on a
-stratified 80/20 split:
+`src/treino.py` treina e compara três classificadores num split
+**cronológico** (nunca aleatório — treinar com dados do futuro para prever o
+passado seria vazamento de informação):
 
-| Model | Why it's included |
+| Modelo | Por que está aqui |
 |---|---|
-| Logistic Regression (scaled, `class_weight="balanced"`) | Interpretable baseline; coefficients are directly explainable to business stakeholders |
-| Random Forest | Captures non-linear interactions (e.g. contract × tenure) without manual feature crosses |
-| Gradient Boosting | Usually the strongest tabular-data performer; benchmark for the other two |
+| Regressão Logística (padronizada, `class_weight="balanced"`) | Baseline interpretável — coeficientes explicáveis a uma área de negócio/risco |
+| Random Forest | Captura interações não-lineares (ex: Selic alta + desemprego subindo) sem cruzar features manualmente |
+| Gradient Boosting | Geralmente o mais forte em dados tabulares; benchmark para os outros dois |
 
-The best model is selected by **ROC-AUC** on the held-out test set (a better
-metric than accuracy here, since churn is imbalanced at ~27-29%). Metrics for
-every candidate are saved to `models/metrics.json` for full transparency —
-not just the winner.
+O painel de dados é montado em formato longo (uma linha por mês × segmento
+de crédito), o que triplica o número de amostras em relação a usar só a
+série total — importante porque séries macro mensais geram poucas
+observações por natureza (~170 meses de histórico).
 
-**Results (test set, stratified 80/20 split):**
+Rode `python src/treino.py` para gerar/atualizar os números reais desta
+tabela na sua máquina:
 
-| Model | ROC-AUC | Accuracy | Precision | Recall | F1 |
-|---|---|---|---|---|---|
-| Logistic Regression | 0.824 | 0.745 | 0.541 | 0.797 | 0.644 |
-| Random Forest **(selected)** | 0.824 | 0.737 | 0.533 | 0.780 | 0.633 |
-| Gradient Boosting | 0.822 | 0.767 | 0.625 | 0.489 | 0.549 |
-
-Random Forest was selected by ROC-AUC (its edge over logistic regression is
-marginal — both are reasonable choices, and the interpretable logistic
-regression would be the safer pick if stakeholders need to see *why* a
-prediction was made). Recall is prioritized over precision in the business
-framing: missing a customer who's about to churn is costlier than a false
-alarm, since retention offers are cheap relative to losing the account.
-
-Re-run `python src/train.py` to regenerate this table with fresh numbers.
+```
+$ cat models/metrics.json
+```
 
 ## API
 
 ```bash
-curl -X POST http://localhost:8000/predict \
+curl -X POST http://localhost:8000/prever \
   -H "Content-Type: application/json" \
   -d '{
-    "gender": "Female", "SeniorCitizen": 0, "Partner": "Yes", "Dependents": "No",
-    "tenure": 2, "PhoneService": "Yes", "MultipleLines": "No",
-    "InternetService": "Fiber optic", "OnlineSecurity": "No", "OnlineBackup": "No",
-    "DeviceProtection": "No", "TechSupport": "No", "StreamingTV": "Yes", "StreamingMovies": "No",
-    "Contract": "Month-to-month", "PaperlessBilling": "Yes",
-    "PaymentMethod": "Electronic check", "MonthlyCharges": 85.5, "TotalCharges": 171.0
+    "segmento": "pf", "mes": 5, "trimestre": 2, "tendencia": 170,
+    "selic_mensal": 1.07, "selic_acum_3m": 3.29,
+    "ipca_mensal": 0.58, "ipca_acum_12m": 5.2,
+    "desemprego": 5.6,
+    "saldo_credito_var_mensal": 0.3, "saldo_credito_var_12m": 6.9,
+    "inadimplencia_lag1": 7.42, "inadimplencia_lag2": 7.17, "inadimplencia_lag3": 7.06
   }'
 ```
 
 ```json
-{ "churn_probability": 0.78, "risk_label": "high", "model_version": "gradient_boosting" }
+{ "probabilidade_subida": 0.71, "nivel_risco": "alto", "versao_modelo": "random_forest" }
 ```
 
-## Monitoring
+## Monitoramento
 
-`src/monitoring.py` computes the **Population Stability Index (PSI)** per
-feature between a reference set (training data) and current data (e.g. last
-week's traffic), the standard technique for detecting silent data drift in
-production ML:
+`src/monitoramento.py` calcula o **PSI (Population Stability Index)** por
+feature entre o período de treino e o período mais recente — a técnica
+padrão de mercado para detectar mudança silenciosa de cenário em produção.
 
 ```bash
-python src/monitoring.py --reference data/processed/train.csv \
-                          --current data/processed/test.csv
+python src/monitoramento.py
 ```
 
-PSI < 0.1 → stable · 0.1–0.2 → moderate drift (watch) · > 0.2 → significant
-drift (investigate/retrain). This was validated with a synthetic drift
-injection test in `tests/test_monitoring.py`.
+PSI < 0.1 → estável · 0.1–0.2 → drift moderado (observar) · > 0.2 → drift
+significativo (investigar/retreinar).
 
-## Testing
+**Achado real deste projeto:** ao comparar o período de treino
+(2013–2023) com o período de teste mais recente (2023–2026), quase todas as
+features macroeconômicas (Selic, IPCA acumulado, desemprego, saldo de
+crédito) apresentaram drift significativo — o que reflete a mudança real de
+regime econômico no Brasil nesses anos (juros e inflação em patamares bem
+diferentes). Isso é exatamente o tipo de alerta que levaria uma área de
+risco a reavaliar o modelo antes de confiar cegamente nele.
+
+## Testes
 
 ```bash
 pytest -v
 ```
 
-- `test_data_processing.py` — cleaning, feature engineering, and train/test
+- `test_processamento.py` — painel sem dados faltantes, split crono
