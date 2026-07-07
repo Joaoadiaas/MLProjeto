@@ -114,6 +114,12 @@ Ou com Docker:
 docker compose up --build
 ```
 
+> No Windows (PowerShell/CMD), o comando `make` não existe por padrão. Use
+> os comandos diretos: `python src/coleta_dados.py`, `python src/treino.py`,
+> `pytest -v`, `uvicorn api.main:app --reload --port 8000`,
+> `streamlit run app/dashboard.py` (ou instale o `make` via
+> [Chocolatey](https://chocolatey.org/) / WSL).
+
 ## Abordagem de modelagem
 
 `src/treino.py` treina e compara três classificadores num split
@@ -131,12 +137,24 @@ de crédito), o que triplica o número de amostras em relação a usar só a
 série total — importante porque séries macro mensais geram poucas
 observações por natureza (~170 meses de histórico).
 
-Rode `python src/treino.py` para gerar/atualizar os números reais desta
-tabela na sua máquina:
+**Resultados reais (período de teste, 2023-2026, nunca visto no treino):**
 
-```
-$ cat models/metrics.json
-```
+| Modelo | ROC-AUC | Acurácia | Precisão | Recall | F1 |
+|---|---|---|---|---|---|
+| Regressão Logística | 0.735 | 0.656 | 0.656 | 0.793 | 0.718 |
+| Random Forest | 0.658 | 0.677 | 0.690 | 0.755 | 0.721 |
+| Gradient Boosting **(selecionado)** | 0.769 | 0.708 | 0.705 | 0.811 | 0.754 |
+
+Gradient Boosting venceu com folga sobre o Random Forest — plausível: com
+poucas amostras (painel mensal), modelos com regularização mais forte
+(boosting raso, poucas árvores, `max_depth=2`) tendem a generalizar melhor
+que uma floresta com árvores mais profundas, que aqui parece ter overfitado
+um pouco. Recall alto (0.81) é o que importa mais nesse contexto: para uma
+área de risco, deixar passar um mês em que a inadimplência vai piorar é
+mais caro do que um falso alarme ocasional.
+
+Re-rode `python src/treino.py` para atualizar esta tabela com dados mais
+recentes (o Banco Central publica novos números todo mês).
 
 ## API
 
@@ -149,39 +167,4 @@ curl -X POST http://localhost:8000/prever \
     "ipca_mensal": 0.58, "ipca_acum_12m": 5.2,
     "desemprego": 5.6,
     "saldo_credito_var_mensal": 0.3, "saldo_credito_var_12m": 6.9,
-    "inadimplencia_lag1": 7.42, "inadimplencia_lag2": 7.17, "inadimplencia_lag3": 7.06
-  }'
-```
-
-```json
-{ "probabilidade_subida": 0.71, "nivel_risco": "alto", "versao_modelo": "random_forest" }
-```
-
-## Monitoramento
-
-`src/monitoramento.py` calcula o **PSI (Population Stability Index)** por
-feature entre o período de treino e o período mais recente — a técnica
-padrão de mercado para detectar mudança silenciosa de cenário em produção.
-
-```bash
-python src/monitoramento.py
-```
-
-PSI < 0.1 → estável · 0.1–0.2 → drift moderado (observar) · > 0.2 → drift
-significativo (investigar/retreinar).
-
-**Achado real deste projeto:** ao comparar o período de treino
-(2013–2023) com o período de teste mais recente (2023–2026), quase todas as
-features macroeconômicas (Selic, IPCA acumulado, desemprego, saldo de
-crédito) apresentaram drift significativo — o que reflete a mudança real de
-regime econômico no Brasil nesses anos (juros e inflação em patamares bem
-diferentes). Isso é exatamente o tipo de alerta que levaria uma área de
-risco a reavaliar o modelo antes de confiar cegamente nele.
-
-## Testes
-
-```bash
-pytest -v
-```
-
-- `test_processamento.py` — painel sem dados faltantes, split crono
+    "inadimplencia_lag1": 7.42, "i
