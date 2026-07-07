@@ -119,11 +119,22 @@ metric than accuracy here, since churn is imbalanced at ~27-29%). Metrics for
 every candidate are saved to `models/metrics.json` for full transparency —
 not just the winner.
 
-Run `make train` to populate this section with real numbers for your machine:
+**Results (test set, stratified 80/20 split):**
 
-```
-$ cat models/metrics.json
-```
+| Model | ROC-AUC | Accuracy | Precision | Recall | F1 |
+|---|---|---|---|---|---|
+| Logistic Regression | 0.824 | 0.745 | 0.541 | 0.797 | 0.644 |
+| Random Forest **(selected)** | 0.824 | 0.737 | 0.533 | 0.780 | 0.633 |
+| Gradient Boosting | 0.822 | 0.767 | 0.625 | 0.489 | 0.549 |
+
+Random Forest was selected by ROC-AUC (its edge over logistic regression is
+marginal — both are reasonable choices, and the interpretable logistic
+regression would be the safer pick if stakeholders need to see *why* a
+prediction was made). Recall is prioritized over precision in the business
+framing: missing a customer who's about to churn is costlier than a false
+alarm, since retention offers are cheap relative to losing the account.
+
+Re-run `python src/train.py` to regenerate this table with fresh numbers.
 
 ## API
 
@@ -167,21 +178,3 @@ pytest -v
 ```
 
 - `test_data_processing.py` — cleaning, feature engineering, and train/test
-  split logic (no missing values, correct dtypes, no train/serve schema
-  mismatch)
-- `test_monitoring.py` — PSI correctly returns ~0 for identical distributions
-  and flags injected drift
-- `test_api.py` — API contract: `/health`, `/predict` returns a valid
-  probability, invalid payloads are rejected with 422
-
-## What I'd do next
-
-- Hyperparameter tuning with `Optuna` instead of fixed params
-- Model registry (MLflow) instead of a flat `models/` folder
-- Replace PSI drift checks with a scheduled job + alerting (e.g. Slack webhook)
-- A/B test the model against a business rule baseline before full rollout
-
-## Tech stack
-
-Python · pandas · scikit-learn · FastAPI · Streamlit · SHAP · pytest ·
-Docker · GitHub Actions
