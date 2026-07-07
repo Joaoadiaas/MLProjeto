@@ -1,19 +1,17 @@
 services:
-  n8n:
-    image: n8nio/n8n:latest
-    container_name: n8n
-    restart: unless-stopped
+  api:
+    build: .
     ports:
-      - "5678:5678"
-    environment:
-      # Fuso horario (ajuste se quiser)
-      - GENERIC_TIMEZONE=America/Recife
-      - TZ=America/Recife
-      # Necessario para o login funcionar em http://localhost (sem HTTPS)
-      - N8N_SECURE_COOKIE=false
+      - "8000:8000"
     volumes:
-      # Guarda seus workflows e credenciais mesmo se o container reiniciar
-      - ./n8n_data:/home/node/.n8n
-    # "start --tunnel" gera uma URL publica temporaria.
-    # E ela que o Telegram usa para te enviar as mensagens (webhook).
-    command: start --tunnel
+      - ./models:/app/models
+
+  dashboard:
+    build: .
+    command: streamlit run app/dashboard.py --server.port 8501 --server.address 0.0.0.0
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./models:/app/models
+    depends_on:
+      - api
