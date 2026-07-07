@@ -19,9 +19,29 @@ macroeconômico atual (Selic, inflação, desemprego, volume de crédito) e o
 histórico recente de inadimplência, o modelo estima a probabilidade de a
 inadimplência **piorar** no mês seguinte.
 
-Diferente da maioria dos projetos de portfólio, aqui os dados **não são
-sintéticos**: vêm da API pública do Banco Central (SGS), a mesma fonte usada
-por analistas de mercado e áreas de risco.
+Os dados usados são reais: vêm da API pública do Banco Central (SGS), a
+mesma fonte usada por analistas de mercado e áreas de risco.
+
+## Como o modelo prevê
+
+A previsão funciona em três passos:
+
+1. **Olha o cenário atual.** Para um segmento de crédito (total, PF ou PJ),
+   o modelo recebe a Selic, o IPCA, o desemprego, a variação do saldo de
+   crédito e o valor da inadimplência nos últimos 3 meses.
+2. **Compara com o que aconteceu historicamente em cenários parecidos.**
+   Usando ~15 anos de dados reais, um classificador (regressão logística,
+   random forest ou gradient boosting — o melhor é escolhido automaticamente)
+   aprende o padrão entre "como estava a economia" e "a inadimplência subiu
+   ou não no mês seguinte".
+3. **Devolve uma probabilidade e um nível de risco.** A saída não é só
+   "sim/não" — é uma probabilidade (ex: 71%) traduzida em baixo/médio/alto,
+   junto com uma explicação (via SHAP) de quais fatores mais pesaram naquela
+   previsão específica.
+
+Em resumo: é o mesmo tipo de raciocínio que um analista de risco faria
+olhando os indicadores econômicos do mês, só que automatizado, testado e
+disponível como serviço (API/dashboard) em vez de uma planilha manual.
 
 ## Fonte dos dados (100% real e pública)
 
@@ -167,4 +187,63 @@ curl -X POST http://localhost:8000/prever \
     "ipca_mensal": 0.58, "ipca_acum_12m": 5.2,
     "desemprego": 5.6,
     "saldo_credito_var_mensal": 0.3, "saldo_credito_var_12m": 6.9,
-    "inadimplencia_lag1": 7.42, "i
+    "inadimplencia_lag1": 7.42, "inadimplencia_lag2": 7.17, "inadimplencia_lag3": 7.06
+  }'
+```
+
+```json
+{ "probabilidade_subida": 0.71, "nivel_risco": "alto", "versao_modelo": "gradient_boosting" }
+```
+
+## Monitoramento
+
+`src/monitoramento.py` calcula o **PSI (Population Stability Index)** por
+feature entre o período de treino e o período mais recente — a técnica
+padrão de mercado para detectar mudança silenciosa de cenário em produção.
+
+```bash
+python src/monitoramento.py
+```
+
+PSI < 0.1 → estável · 0.1–0.2 → drift moderado (observar) · > 0.2 → drift
+significativo (investigar/retreinar).
+
+**Achado real deste projeto:** ao comparar o período de treino
+(2013–2023) com o período de teste mais recente (2023–2026), quase todas as
+features macroeconômicas (Selic, IPCA acumulado, desemprego, saldo de
+crédito) apresentaram drift significativo — o que reflete a mudança real de
+regime econômico no Brasil nesses anos (juros e inflação em patamares bem
+diferentes). Isso é exatamente o tipo de alerta que levaria uma área de
+risco a reavaliar o modelo antes de confiar cegamente nele.
+
+## Testes
+
+```bash
+pytest -v
+```
+
+- `test_processamento.py` — painel sem dados faltantes, split cronológico
+  sem vazamento de futuro, colunas consistentes entre treino/teste
+- `test_monitoramento.py` — PSI ~0 para distribuições idênticas e sinaliza
+  drift injetado
+- `test_api.py` — contrato da API: `/health`, `/prever` retorna
+  probabilidade válida, payload inválido retorna 422
+
+## Limitações e próximos passos
+
+- Histórico mensal é curto para ML (poucas centenas de amostras mesmo em
+  formato longo) — em produção real, se usaria dados diários/semanais e/ou
+  dados no nível de operação de crédito (não disponíveis publicamente no
+  Brasil por sigilo bancário/LGPD).
+- Próximo passo natural: combinar este sinal macro com um modelo de scoring
+  individual (por CPF/CNPJ) dentro da própria instituição, que tem acesso
+  aos dados transacionais reais dos seus clientes.
+- Adicionar mais variáveis macro (câmbio, confiança do consumidor - FGV/CNI,
+  concentração setorial da carteira de crédito).
+- Re-treinar periodicamente (ex: mensal, assim que o BCB publica os novos
+  dados) e disparar alerta automático quando o PSI passar de 0.2.
+
+## Stack técnica
+
+Python · pandas · scikit-learn · FastAPI · Streamlit · SHAP · pytest ·
+Docker · GitHub Actions · API de Dados Abertos do Banco Central do Brasil
